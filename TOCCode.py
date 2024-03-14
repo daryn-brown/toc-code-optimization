@@ -12,8 +12,8 @@ app.geometry("800x600")
 # Define our token types and regex patterns
 token_specs = [
     ('NUMBER',   r'\d+(\.\d*)?'),         # Integer or decimal number
-    ('ASSIGN',   r'='),                   # Assignment operator
     ('EQUALS',   r'=='),                  # Equality operator
+    ('ASSIGN',   r'='),                   # Assignment operator
     ('PLUS',     r'\+'),                  # Addition operator
     ('MINUS',    r'-'),                   # Subtraction operator
     ('MULTIPLY', r'\*'),                  # Multiplication operator
