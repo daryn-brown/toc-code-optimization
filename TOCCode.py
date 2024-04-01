@@ -37,8 +37,6 @@ token_specs = [
     ('PERIOD',   r'\.'),                  # Period (dot)
     ('COLON',    r':'),                   # Colon
     ('SEMICOLON', r';'),                  # Semicolon
-    ('QUOTE',    r'\''),                  # Single quote
-    ('DOUBLE_QUOTE', r'\"'),              # Double quote
     ('BACKSLASH', r'\\'),                 # Backslash
     ('PIPE',     r'\|'),                  # Pipe (bitwise or)
     ('AMPERSAND', r'&'),                  # Ampersand (bitwise and)
@@ -49,8 +47,10 @@ token_specs = [
     ('BOOL_NOT', r'not'),                 # Boolean not
     ('WHITESPACE', r'\s+'),               # Whitespace
     ('NEWLINE',  r'\n'),                  # Line endings
+    ('STRING',   r'"(\\.|[^"\\])*"|\'(\\.|[^\'\\])*\''), # String literals with support for escaped quotes
     ('IDENTIFIER',       r'[A-Za-z_]\w*'),        # Identifiers
-    ('STRING',   r'\".*?\"|\'.*?\''),     # String literals
+    ('QUOTE',    r'\''),                  # Single quote
+    ('DOUBLE_QUOTE', r'\"'),              # Double quote
     ('COMMENT',  r'#.*'),                 # Comments
     ('SKIP',     r'[ \t]+'),              # Skip over spaces and tabs
     ('MISMATCH', r'.'),                   # Any other character
@@ -158,10 +158,33 @@ class Parser:
                 elif self.current_token[1] == 'while':
                     statements.append(self.parse_while_statement())
             elif self.current_token[0] == 'IDENTIFIER':
-                statements.append(self.parse_assignment_statement())
+                # Peek at the next token to determine if it's a function call or assignment
+                if self.peek_next_token()[0] == 'LPAREN':
+                    statements.append(self.parse_function_call())
+                else:
+                    statements.append(self.parse_assignment_statement())
             else:
                 self.next_token()  # Skip unrecognized tokens
         return statements
+    
+    def parse_function_call(self):
+        function_name = self.current_token[1]
+        self.match('IDENTIFIER')
+        self.match('LPAREN')  # Consume the left parenthesis '('
+
+        args = []
+        if self.current_token[0] != 'RPAREN':
+            args.append(self.parse_expression())  # Parse the first argument
+
+        while self.current_token[0] == 'COMMA':
+            self.match('COMMA')  # Consume the comma ','
+            args.append(self.parse_expression())  # Parse the next argument
+
+        self.match('RPAREN')  # Consume the right parenthesis ')'
+        # Assuming function call must be followed by a semicolon ';'
+        self.match('SEMICOLON')
+
+        return {'type': 'function_call', 'name': function_name, 'arguments': args}
 
     def parse_if_statement(self):
         self.match('KEYWORD')  # Consume 'if'
@@ -179,10 +202,22 @@ class Parser:
         var_name = self.current_token[1]
         self.match('IDENTIFIER')
         self.match('ASSIGN')
-        value = self.current_token[1]
-        self.match('NUMBER')
+        value = self.parse_expression()  # Parse the expression instead of directly expecting a number
         self.match('END')
         return {'type': 'assignment', 'variable': var_name, 'value': value}
+
+    def parse_expression(self):
+        # Parse a simple expression (number, identifier, or string literal)
+        if self.current_token[0] in ['NUMBER', 'IDENTIFIER', 'STRING']:
+            expression = self.current_token[1]
+            self.next_token()
+            return expression
+        else:
+            # Handle error
+            expected_value = self.current_token[1] if self.current_token else 'EOF'
+            print(f"Expected NUMBER, IDENTIFIER, or STRING, got {expected_value}")
+            return None
+
 
     def parse_condition(self):
         # Simplified condition parsing
@@ -205,6 +240,16 @@ class Parser:
             print(f"Expected NUMBER, got {self.current_token[1]}")
         
         return {'left_operand': left_operand, 'operator': operator, 'right_operand': right_operand}
+    
+    def peek_next_token(self):
+        # Temporarily save the state of the current token
+        current = self.current_token
+        # Get the next token
+        self.next_token()
+        next_token = self.current_token
+        # Restore the state of the current token
+        self.current_token = current
+        return next_token
 
      
 
