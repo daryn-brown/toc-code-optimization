@@ -207,16 +207,17 @@ class Parser:
         return {'type': 'assignment', 'variable': var_name, 'value': value}
 
     def parse_expression(self):
-        # Parse a simple expression (number, identifier, or string literal)
-        if self.current_token[0] in ['NUMBER', 'IDENTIFIER', 'STRING']:
-            expression = self.current_token[1]
-            self.next_token()
-            return expression
-        else:
-            # Handle error
-            expected_value = self.current_token[1] if self.current_token else 'EOF'
-            print(f"Expected NUMBER, IDENTIFIER, or STRING, got {expected_value}")
-            return None
+        expression_parts = []
+
+        # Keep parsing until we reach a token that signifies the end of the expression,
+        # including the newline character as one of those tokens.
+        while self.current_token and self.current_token[0] not in ['SEMICOLON', 'RPAREN', 'COMMA', 'NEWLINE']:
+            expression_parts.append(self.current_token[1])
+            self.next_token()  # Move to the next token
+
+        # Join the collected parts into a single string representing the full expression
+        return ' '.join(expression_parts)
+
 
 
     def parse_condition(self):
@@ -251,30 +252,48 @@ class Parser:
         self.current_token = current
         return next_token
     
+    
 # Define a function to perform constant folding
 def constant_folding(statements):
-    # Traverse each statement in the syntax tree
     for statement in statements:
-        if statement['type'] == 'assignment':
-            # Check if the assignment statement involves constant expressions
-            if all(isinstance(val, int) for val in [statement['value']]):
-                # Perform constant folding by evaluating the expression
-                result = evaluate_expression(statement['value'])
-                # Replace the expression with the computed constant value
-                statement['value'] = result
-        elif statement['type'] == 'if':
-            # Recursively apply constant folding to if statement conditions
-            constant_folding([statement['condition']])
-        elif statement['type'] == 'while':
-            # Recursively apply constant folding to while statement conditions
-            constant_folding([statement['condition']])
+        if statement['type'] == 'assignment' and isinstance(statement['value'], str):
+            # Evaluate the expression in the assignment
+            statement['value'] = evaluate_expression(statement['value'])
+    return statements
 
 # Define a function to evaluate constant expressions
 def evaluate_expression(expression):
-    # Simply return the value of the constant expression
-    return expression
-# def print_folded():
-#     # Replace the Tokenize button with a Parse button
+    # If the expression is just a number (int or float), return it directly
+    try:
+        return eval(expression)
+    except NameError:
+        # If the expression involves variables or is not purely numeric, return it as is
+        return expression
+
+def display_folded_code():
+    tabView.set("Constant Folding")
+    # Get the code from the textbox
+    code = textbox.get("1.0", "end-1c")
+
+    # Tokenize and parse the code to get parsed statements
+    tokens = list(tokenize(code))  # Ensure tokenize returns a list or convert it to a list
+    parser = Parser(tokens)
+    parsed_statements = parser.parse()
+
+    # Apply constant folding to the parsed statements
+    folded_statements = constant_folding(parsed_statements)
+
+    # Display the folded code in the folding_textbox
+    folding_textbox.configure(state="normal")  # Enable editing the textbox
+    folding_textbox.delete("1.0", "end")  # Clear the current content
+
+    # Assuming parsed_statements is a list of dictionaries as mentioned
+    for statement in folded_statements:
+        if 'variable' in statement and 'value' in statement:
+            folding_textbox.insert("end", f"{statement['variable']} = {statement['value']}\n")
+
+    folding_textbox.configure(state="disabled")  # Disable editing the textbox
+    # Switch to the "Parse" tab
     
 
 # # Example usage
@@ -315,10 +334,13 @@ tokens_textbox.place(relx=0.5, rely=0.7, anchor="center")
 parser_textbox = customtkinter.CTkTextbox(tabView.tab("Parse"), width=400, height=200, state="disabled")
 parser_textbox.place(relx=0.5, rely=0.3, anchor="center")
 
+folding_textbox = customtkinter.CTkTextbox(tabView.tab("Constant Folding"), width=400, height=200, state="disabled")
+folding_textbox.place(relx=0.5, rely=0.5, anchor="center")
+
 tokenButton = customtkinter.CTkButton(tabView.tab("Tokenize"), text="Tokenize", command=print_tokens)
 tokenButton.place(relx=0.5, rely=0.9, anchor="center")
 
-foldButton = customtkinter.CTkButton(tabView.tab("Parse"), text="Apply Constant Folding", command=constant_folding)
+foldButton = customtkinter.CTkButton(tabView.tab("Parse"), text="Apply Constant Folding", command=display_folded_code)
 foldButton.place(relx=0.5, rely=0.7, anchor="center")
 
 
