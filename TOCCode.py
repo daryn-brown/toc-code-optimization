@@ -250,7 +250,48 @@ class Parser:
         # Restore the state of the current token
         self.current_token = current
         return next_token
+    
+# Define a function to perform constant folding
+def constant_folding(statements):
+    # Traverse each statement in the syntax tree
+    for statement in statements:
+        if statement['type'] == 'assignment':
+            # Check if the assignment statement involves constant expressions
+            if all(isinstance(val, int) for val in [statement['value']]):
+                # Perform constant folding by evaluating the expression
+                result = evaluate_expression(statement['value'])
+                # Replace the expression with the computed constant value
+                statement['value'] = result
+        elif statement['type'] == 'if':
+            # Recursively apply constant folding to if statement conditions
+            constant_folding([statement['condition']])
+        elif statement['type'] == 'while':
+            # Recursively apply constant folding to while statement conditions
+            constant_folding([statement['condition']])
 
+# Define a function to evaluate constant expressions
+def evaluate_expression(expression):
+    # Simply return the value of the constant expression
+    return expression
+# def print_folded():
+#     # Replace the Tokenize button with a Parse button
+    
+
+# # Example usage
+# if __name__ == "__main__":
+#     # Sample syntax tree
+#     statements = [
+#         {'type': 'assignment', 'variable': 'x', 'value': 5},
+#         {'type': 'assignment', 'variable': 'y', 'value': 10},
+#         {'type': 'assignment', 'variable': 'z', 'value': 'x + y'}
+#     ]
+
+#     # Apply constant folding
+#     constant_folding(statements)
+
+#     # Print optimized statements
+#     for statement in statements:
+#         print(statement)
      
 
 
@@ -259,6 +300,9 @@ tabView.pack(padx=20, pady=20, fill="both", expand=True)
 
 tabView.add("Tokenize")
 tabView.add("Parse")
+tabView.add("Constant Folding")
+tabView.add("Dead Code Elimination")
+
 
 tabView.set("Tokenize")
 
@@ -273,6 +317,9 @@ parser_textbox.place(relx=0.5, rely=0.3, anchor="center")
 
 tokenButton = customtkinter.CTkButton(tabView.tab("Tokenize"), text="Tokenize", command=print_tokens)
 tokenButton.place(relx=0.5, rely=0.9, anchor="center")
+
+foldButton = customtkinter.CTkButton(tabView.tab("Parse"), text="Apply Constant Folding", command=constant_folding)
+foldButton.place(relx=0.5, rely=0.7, anchor="center")
 
 
 
