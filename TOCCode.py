@@ -62,31 +62,44 @@ tok_regex = '|'.join('(?P<%s>%s)' % pair for pair in token_specs)
 # Compile the regex
 get_token = re.compile(tok_regex, re.DOTALL).match
 
+indent_level = 0  # Current level of indentation
+indent_stack = [0]  # Stack to keep track of indentation levels (0 represents the base level)
+
+
 # A generator function that yields matched tokens
 def tokenize(code):
-    print("Tokenizing code...")  # Debugging print statement
+    print("Tokenizing code...")
     line_number = 1
     current_position = line_number_start = 0
-    match = get_token(code)
-    while match is not None:
-        token_type = match.lastgroup
-        token_value = match.group(token_type)
-        if token_type == 'NEWLINE':
-            line_number += 1
-            line_number_start = current_position
-        elif token_type == 'SKIP':
-            pass
-        elif token_type == 'MISMATCH':
-            print(f'Warning: {line_number}:{current_position - line_number_start}: Illegal character {token_value!r}')
-        elif token_type != 'WHITESPACE':  # Skip whitespace tokens
-            if token_type == 'IDENTIFIER' and token_value in ['if', 'else', 'for', 'while']:
-                token_type = 'KEYWORD'
-            yield token_type, token_value
-        current_position = match.end()
-        match = get_token(code, current_position)
-    if current_position != len(code):
-        # Handle error: part of the code was not tokenized
-        print(f'Warning: Unexpected end of input at {line_number}:{current_position - line_number_start}')
+    global indent_level, indent_stack  # Use global variables for indentation tracking
+
+    lines = code.split('\n')
+    for line in lines:
+        # Calculate the indentation level of the current line (number of leading spaces)
+        new_indent_level = len(line) - len(line.lstrip(' '))
+        if new_indent_level > indent_stack[-1]:
+            # If the new indent level is greater, we have an INDENT
+            indent_stack.append(new_indent_level)
+            yield 'INDENT', new_indent_level
+        while new_indent_level < indent_stack[-1]:
+            # If the new indent level is lesser, we have a DEDENT for each level we go back
+            indent_stack.pop()
+            yield 'DEDENT', indent_stack[-1]
+        
+        # Tokenize the rest of the line as before
+        current_position = 0
+        match = get_token(line)
+        while match is not None:
+            token_type = match.lastgroup
+            token_value = match.group(token_type)
+            if token_type not in ['WHITESPACE', 'NEWLINE', 'SKIP']:  # Handle tokens as before, but ignore leading whitespace
+                yield token_type, token_value
+            current_position = match.end()
+            match = get_token(line, current_position)
+
+        yield 'NEWLINE', '\n'  # Yield a NEWLINE at the end of each line
+        line_number += 1
+
 
 def print_tokens():
     global tokens_textbox
@@ -187,10 +200,62 @@ class Parser:
         return {'type': 'function_call', 'name': function_name, 'arguments': args}
 
     def parse_if_statement(self):
-        self.match('KEYWORD')  # Consume 'if'
-        condition = self.parse_condition()
-        self.match('END')  # Assuming a simplified syntax; consume ';'
-        return {'type': 'if', 'condition': condition}
+        self.match('if')
+        condition = self.parse_expression()  # Parse the condition
+        self.match('COLON')  # Assuming a colon follows the condition in Python syntax
+        body = self.parse_block()  # Parse the block of statements forming the body
+
+        else_body = None
+        if self.current_token and self.current_token[0] == 'KEYWORD' and self.current_token[1] == 'else':
+            self.match('else')
+            self.match('COLON')
+            else_body = self.parse_block()  # Parse the else block
+
+        return {
+            'type': 'if',
+            'condition': condition,
+            'body': body,
+            'else_body': else_body
+        }
+    
+    def parse_block(self):
+        # A method to parse a block of statements until the end of the block is reached.
+        # This could be determined by a decrease in indentation level, or by reaching an 'else',
+        # 'elif', 'except', 'finally', or similar.
+        statements = []
+        while not self.is_end_of_block():
+            statement = self.parse_next_statement()
+            if statement:
+                statements.append(statement)
+        return statements
+    
+    def is_end_of_block(self):
+        # Check if the next token indicates a dedent, which would mean the end of the current block.
+        # This assumes your tokenizer generates 'INDENT' and 'DEDENT' tokens to represent changes in indentation.
+        # Additionally, check for any token that should logically terminate a block (e.g., 'else', 'elif', 'except', etc.),
+        # but ensure to differentiate cases where these tokens might appear within the block itself (like in nested if-else structures).
+
+        if not self.current_token:
+            # End of file
+            return True
+
+        # Assuming you have 'DEDENT' tokens to mark the end of blocks
+        if self.current_token[0] == 'DEDENT':
+            return True
+
+        # Assuming 'NEWLINE' tokens are used and might precede 'DEDENT' tokens or indicate a pause in statements.
+        # However, 'NEWLINE' on its own isn't always an indication of the end of a block, as blocks might contain blank lines.
+        if self.current_token[0] == 'NEWLINE':
+            # Peek at the next token to see if it's 'DEDENT' or another 'NEWLINE'.
+            next_token = self.peek_next_token()
+            if next_token and next_token[0] == 'DEDENT':
+                return True
+
+        # Check for other tokens that might logically end a block, if applicable
+        # This part depends on the structure of your language and parser
+
+        return False
+
 
     def parse_while_statement(self):
         self.match('KEYWORD')  # Consume 'while'
@@ -255,10 +320,16 @@ class Parser:
     
 # Define a function to perform constant folding
 def constant_folding(statements):
+    # Modified to evaluate expressions where possible but retain all statements
     for statement in statements:
-        if statement['type'] == 'assignment' and isinstance(statement['value'], str):
-            # Evaluate the expression in the assignment
-            statement['value'] = evaluate_expression(statement['value'])
+        if statement['type'] == 'assignment':
+            # Attempt to evaluate the expression if it's purely numeric
+            try:
+                # Only attempt evaluation if it's safe (no variables/functions)
+                if isinstance(statement['value'], str) and all(char.isdigit() or char in " +-*/()" for char in statement['value']):
+                    statement['value'] = str(eval(statement['value']))
+            except Exception as e:
+                print(f"Skipping optimization due to error: {e}")
     return statements
 
 # Define a function to evaluate constant expressions
