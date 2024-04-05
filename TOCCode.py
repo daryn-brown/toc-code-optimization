@@ -1,5 +1,6 @@
 import customtkinter
 import re
+import threading
 
 customtkinter.set_appearance_mode("system")
 customtkinter.set_default_color_theme("green")
@@ -12,6 +13,7 @@ app.geometry("800x600")
 # Define our token types and regex patterns
 token_specs = [
     ('NUMBER',   r'\d+(\.\d*)?'),         # Integer or decimal number
+    ('KEYWORD',  r'\b(if|else|while|for|break)\b'), # Keywords
     ('EQUALS',   r'=='),                  # Equality operator
     ('ASSIGN',   r'='),                   # Assignment operator
     ('PLUS',     r'\+'),                  # Addition operator
@@ -112,8 +114,14 @@ def print_tokens():
     tokens_textbox.configure(state="disabled")  # Disable editing the textbox
     # Replace the Tokenize button with a Parse button
     tokenButton.destroy()  # Remove the Tokenize button
-    parseButton = customtkinter.CTkButton(tabView.tab("Tokenize"), text="Parse", command=parse_code)
+    parseButton = customtkinter.CTkButton(tabView.tab("Tokenize"), text="Parse", command=parse_code_thread)
     parseButton.place(relx=0.5, rely=0.9, anchor="center")
+
+# Define a function to parse the code in a separate thread
+def parse_code_thread():
+    # Call the parse_code function inside a new thread
+    threading.Thread(target=parse_code).start()
+
 
 def parse_code():
     global parser_textbox
@@ -200,68 +208,70 @@ class Parser:
         return {'type': 'function_call', 'name': function_name, 'arguments': args}
 
     def parse_if_statement(self):
-        self.match('if')
-        condition = self.parse_expression()  # Parse the condition
-        self.match('COLON')  # Assuming a colon follows the condition in Python syntax
-        body = self.parse_block()  # Parse the block of statements forming the body
-
-        else_body = None
-        if self.current_token and self.current_token[0] == 'KEYWORD' and self.current_token[1] == 'else':
-            self.match('else')
+        self.match('KEYWORD')  # Consumes 'if'
+        condition = self.parse_expression()  # Parses the condition
+        
+        self.match('COLON')
+        self.match('NEWLINE')
+        self.match('INDENT')
+        
+        if_body = self.parse_block()  # Parses the 'if' body
+        
+        else_body = []
+        # Check if there's an 'else' part following the 'if' part
+        next_token = self.peek_next_token()
+        if next_token and next_token[1] == 'else':
+            self.next_token()  # Consumes 'else'
             self.match('COLON')
-            else_body = self.parse_block()  # Parse the else block
-
+            self.match('NEWLINE')
+            self.match('INDENT')
+            else_body = self.parse_block()  # Parses the 'else' block
+            self.match('DEDENT')  # It's crucial to match 'DEDENT' after parsing the 'else' block
+        
+        self.match('DEDENT')  # Matching 'DEDENT' after parsing the 'if' block, ensuring we exit the block correctly
+        
         return {
-            'type': 'if',
-            'condition': condition,
-            'body': body,
+            'type': 'if_statement',
+            'condition': condition.rstrip(' :'),  # Stripping trailing spaces and colon for cleaner condition
+            'if_body': if_body,
             'else_body': else_body
         }
-    
+
     def parse_block(self):
-        # A method to parse a block of statements until the end of the block is reached.
-        # This could be determined by a decrease in indentation level, or by reaching an 'else',
-        # 'elif', 'except', 'finally', or similar.
-        statements = []
-        while not self.is_end_of_block():
-            statement = self.parse_next_statement()
-            if statement:
-                statements.append(statement)
-        return statements
-    
-    def is_end_of_block(self):
-        # Check if the next token indicates a dedent, which would mean the end of the current block.
-        # This assumes your tokenizer generates 'INDENT' and 'DEDENT' tokens to represent changes in indentation.
-        # Additionally, check for any token that should logically terminate a block (e.g., 'else', 'elif', 'except', etc.),
-        # but ensure to differentiate cases where these tokens might appear within the block itself (like in nested if-else structures).
+        block_statements = []
+        while self.current_token and self.current_token[0] != 'DEDENT':
+            if self.current_token[0] == 'IDENTIFIER':
+                if self.peek_next_token()[0] == 'LPAREN':
+                    block_statements.append(self.parse_function_call())
+                    self.next_token()  # Ensure to move past the function call
+                else:
+                    block_statements.append(self.parse_assignment_statement())
+            elif self.current_token[0] == 'KEYWORD':
+                if self.current_token[1] in ['if', 'while', 'for']:
+                    block_statements.append(self.parse_if_statement() if self.current_token[1] == 'if' else self.parse_while_statement())
+            else:
+                self.next_token()  # Advance to the next token if the current one doesn't match expected types
 
-        if not self.current_token:
-            # End of file
-            return True
+            self.next_token()  # Ensure to move to the next token at the end of the loop
 
-        # Assuming you have 'DEDENT' tokens to mark the end of blocks
-        if self.current_token[0] == 'DEDENT':
-            return True
+        # Correctly handle the DEDENT token signaling the end of the block
+        if self.current_token and self.current_token[0] == 'DEDENT':
+            self.next_token()  # Consume the DEDENT token to exit the block
 
-        # Assuming 'NEWLINE' tokens are used and might precede 'DEDENT' tokens or indicate a pause in statements.
-        # However, 'NEWLINE' on its own isn't always an indication of the end of a block, as blocks might contain blank lines.
-        if self.current_token[0] == 'NEWLINE':
-            # Peek at the next token to see if it's 'DEDENT' or another 'NEWLINE'.
-            next_token = self.peek_next_token()
-            if next_token and next_token[0] == 'DEDENT':
-                return True
+        return block_statements
 
-        # Check for other tokens that might logically end a block, if applicable
-        # This part depends on the structure of your language and parser
 
-        return False
 
 
     def parse_while_statement(self):
         self.match('KEYWORD')  # Consume 'while'
-        condition = self.parse_condition()
-        self.match('END')  # Assuming a simplified syntax; consume ';'
-        return {'type': 'while', 'condition': condition}
+        
+        # Parse the condition directly here
+        condition_parts = []
+        while self.current_token and self.current_token[1] != ':':
+            condition_parts.append(self.current_token[1])
+            self.next_token()
+        condition = ' '.join(condition_parts)
 
     def parse_assignment_statement(self):
         var_name = self.current_token[1]
@@ -282,55 +292,50 @@ class Parser:
 
         # Join the collected parts into a single string representing the full expression
         return ' '.join(expression_parts)
-
-
-
-    def parse_condition(self):
-        # Simplified condition parsing
-        left_operand = self.current_token[1]
-        if self.current_token[0] == 'IDENTIFIER':
-            self.next_token()
-        else:
-            print(f"Expected IDENTIFIER, got {self.current_token[1]}")
-        
-        operator = self.current_token[1]
-        if operator in ['==', '!=', '>', '<', '>=', '<=']:
-            self.next_token()  # Move to the next token
-        else:
-            print(f"Invalid comparison operator: {operator}")
-        
-        right_operand = self.current_token[1]
-        if self.current_token[0] == 'NUMBER':
-            self.next_token()  # Move to the next token
-        else:
-            print(f"Expected NUMBER, got {self.current_token[1]}")
-        
-        return {'left_operand': left_operand, 'operator': operator, 'right_operand': right_operand}
     
     def peek_next_token(self):
         # Temporarily save the state of the current token
         current = self.current_token
-        # Get the next token
-        self.next_token()
-        next_token = self.current_token
-        # Restore the state of the current token
-        self.current_token = current
+        try:
+            self.next_token()  # Advance to the next token
+            next_token = self.current_token  # Store the next token
+        finally:
+            # Restore the state of the current token
+            self.current_token = current
         return next_token
+
     
     
 # Define a function to perform constant folding
 def constant_folding(statements):
-    # Modified to evaluate expressions where possible but retain all statements
+
+    if statements is None:
+        return []
+
+    optimized_statements = []
     for statement in statements:
+        if statement is None:
+            continue
         if statement['type'] == 'assignment':
-            # Attempt to evaluate the expression if it's purely numeric
+            # Attempt to optimize assignment statements as before
             try:
-                # Only attempt evaluation if it's safe (no variables/functions)
                 if isinstance(statement['value'], str) and all(char.isdigit() or char in " +-*/()" for char in statement['value']):
                     statement['value'] = str(eval(statement['value']))
+                optimized_statements.append(statement)
             except Exception as e:
                 print(f"Skipping optimization due to error: {e}")
-    return statements
+                optimized_statements.append(statement)
+        elif statement['type'] == 'if_statement':
+            # Apply constant folding to the bodies of the if and else blocks
+            statement['if_body'] = constant_folding(statement['if_body'])
+            statement['else_body'] = constant_folding(statement['else_body'])
+            optimized_statements.append(statement)
+        else:
+            # Handle other statement types as necessary
+            optimized_statements.append(statement)
+    return optimized_statements
+
+
 
 # Define a function to evaluate constant expressions
 def evaluate_expression(expression):
@@ -343,45 +348,98 @@ def evaluate_expression(expression):
 
 def display_folded_code():
     tabView.set("Constant Folding")
-    # Get the code from the textbox
     code = textbox.get("1.0", "end-1c")
-
-    # Tokenize and parse the code to get parsed statements
-    tokens = list(tokenize(code))  # Ensure tokenize returns a list or convert it to a list
+    tokens = list(tokenize(code))
     parser = Parser(tokens)
     parsed_statements = parser.parse()
-
-    # Apply constant folding to the parsed statements
     folded_statements = constant_folding(parsed_statements)
 
-    # Display the folded code in the folding_textbox
-    folding_textbox.configure(state="normal")  # Enable editing the textbox
-    folding_textbox.delete("1.0", "end")  # Clear the current content
+    folding_textbox.configure(state="normal")
+    folding_textbox.delete("1.0", "end")
 
-    # Assuming parsed_statements is a list of dictionaries as mentioned
     for statement in folded_statements:
-        if 'variable' in statement and 'value' in statement:
+        if statement['type'] == 'assignment':
             folding_textbox.insert("end", f"{statement['variable']} = {statement['value']}\n")
+        elif statement['type'] == 'function_call':
+            args = ', '.join([str(arg) for arg in statement['arguments']])
+            folding_textbox.insert("end", f"{statement['name']}({args})\n")
+        elif statement['type'] == 'if':
+            condition = " ".join([statement['condition'][part] for part in ['left_operand', 'operator', 'right_operand']])
+            folding_textbox.insert("end", f"if {condition}:\n")
+            # Note: You might need to handle the body of the if statement.
+        # Handle other types of statements (e.g., 'while', 'for', etc.) as needed
 
-    folding_textbox.configure(state="disabled")  # Disable editing the textbox
-    # Switch to the "Parse" tab
+    folding_textbox.configure(state="disabled")
+
+def eliminate_dead_code(parsed_statements):
+    # Identify used variables
+    used_variables = set()
+    for statement in parsed_statements:
+        if statement['type'] in ['function_call', 'if_statement']:
+            # This simplistic check assumes that all arguments and conditions involve variable usage
+            # You might need a more sophisticated analysis depending on your syntax
+            if statement['type'] == 'function_call':
+                for arg in statement['arguments']:
+                    used_variables.update(extract_variables(arg))
+            elif statement['type'] == 'if_statement':
+                used_variables.update(extract_variables(statement['condition']))
+                used_variables.update(extract_variables_from_block(statement['if_body']))
+                used_variables.update(extract_variables_from_block(statement['else_body']))
+        elif statement['type'] == 'assignment':
+            # Assuming right-hand side might involve variable usage
+            used_variables.update(extract_variables(statement['value']))
+
+    # Eliminate dead assignments
+    optimized_statements = []
+    for statement in parsed_statements:
+        if statement['type'] == 'assignment' and statement['variable'] not in used_variables:
+            # Skip adding this statement to optimized_statements
+            continue
+        optimized_statements.append(statement)
+
+    return optimized_statements
+
+def extract_variables(expression):
+    # Dummy function to extract variables from an expression string
+    # Implement based on your project's needs
+    return set(re.findall(r'\b[A-Za-z_]\w*\b', expression))
+
+def extract_variables_from_block(block):
+    variables = set()
+    for statement in block:
+        if statement is not None:  # Add this check to skip None values
+            if statement['type'] == 'assignment':
+                variables.update(extract_variables(statement['value']))
+            elif statement['type'] == 'function_call':
+                for arg in statement['arguments']:
+                    variables.update(extract_variables(arg))
+    return variables
+
+
+def display_eliminated_code():
+    tabView.set("Dead Code Elimination")
+    code = textbox.get("1.0", "end-1c")  # Get current code
+    tokens = list(tokenize(code))  # Tokenize the code
+    parser = Parser(tokens)  # Initialize the parser
+    parsed_statements = parser.parse()  # Parse the code to get parsed statements
     
+    eliminated_statements = eliminate_dead_code(parsed_statements)  # Apply dead code elimination
+    
+    # Prepare and display the optimized code
+    deadCode_textbox.configure(state="normal")
+    deadCode_textbox.delete("1.0", "end")  # Clear existing content
+    for statement in eliminated_statements:
+        if statement['type'] == 'assignment':
+            deadCode_textbox.insert("end", f"{statement['variable']} = {statement['value']}\n")
+        elif statement['type'] == 'function_call':
+            args = ', '.join(statement['arguments'])
+            deadCode_textbox.insert("end", f"{statement['name']}({args});\n")
+        # Add more conditions as needed for other types of statements
+    deadCode_textbox.configure(state="disabled")
+    
+    # Switch to the "Dead Code Elimination" tab
+    tabView.set("Dead Code Elimination")
 
-# # Example usage
-# if __name__ == "__main__":
-#     # Sample syntax tree
-#     statements = [
-#         {'type': 'assignment', 'variable': 'x', 'value': 5},
-#         {'type': 'assignment', 'variable': 'y', 'value': 10},
-#         {'type': 'assignment', 'variable': 'z', 'value': 'x + y'}
-#     ]
-
-#     # Apply constant folding
-#     constant_folding(statements)
-
-#     # Print optimized statements
-#     for statement in statements:
-#         print(statement)
      
 
 
@@ -408,12 +466,16 @@ parser_textbox.place(relx=0.5, rely=0.3, anchor="center")
 folding_textbox = customtkinter.CTkTextbox(tabView.tab("Constant Folding"), width=400, height=200, state="disabled")
 folding_textbox.place(relx=0.5, rely=0.5, anchor="center")
 
+deadCode_textbox = customtkinter.CTkTextbox(tabView.tab("Dead Code Elimination"), width=400, height=200, state="disabled")
+deadCode_textbox.place(relx=0.5, rely=0.5, anchor="center")
+
 tokenButton = customtkinter.CTkButton(tabView.tab("Tokenize"), text="Tokenize", command=print_tokens)
 tokenButton.place(relx=0.5, rely=0.9, anchor="center")
 
 foldButton = customtkinter.CTkButton(tabView.tab("Parse"), text="Apply Constant Folding", command=display_folded_code)
 foldButton.place(relx=0.5, rely=0.7, anchor="center")
 
-
+deadCodeButton = customtkinter.CTkButton(tabView.tab("Constant Folding"), text="Apply Dead Code Elimination", command=display_eliminated_code)
+deadCodeButton.place(relx=0.5, rely=0.7, anchor="center")
 
 app.mainloop()
