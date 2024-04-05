@@ -1,3 +1,10 @@
+# Authors:
+# Daryn Brown - 2002414
+# Sherissa Pinnock - 2100762
+# Delroy Forbes - 2001604
+# Micah Brown - 1802146
+# Date: 5/4/2024
+
 import customtkinter
 import re
 import threading
@@ -102,6 +109,8 @@ def tokenize(code):
         yield 'NEWLINE', '\n'  # Yield a NEWLINE at the end of each line
         line_number += 1
 
+def print_tokens_threaded():
+    threading.Thread(target=print_tokens).start()
 
 def print_tokens():
     global tokens_textbox
@@ -345,6 +354,9 @@ def evaluate_expression(expression):
     except NameError:
         # If the expression involves variables or is not purely numeric, return it as is
         return expression
+    
+def display_folded_code_threaded():
+    threading.Thread(target=display_folded_code).start()    
 
 def display_folded_code():
     tabView.set("Constant Folding")
@@ -372,32 +384,31 @@ def display_folded_code():
     folding_textbox.configure(state="disabled")
 
 def eliminate_dead_code(parsed_statements):
-    # Identify used variables
-    used_variables = set()
-    for statement in parsed_statements:
-        if statement['type'] in ['function_call', 'if_statement']:
-            # This simplistic check assumes that all arguments and conditions involve variable usage
-            # You might need a more sophisticated analysis depending on your syntax
-            if statement['type'] == 'function_call':
-                for arg in statement['arguments']:
-                    used_variables.update(extract_variables(arg))
-            elif statement['type'] == 'if_statement':
-                used_variables.update(extract_variables(statement['condition']))
-                used_variables.update(extract_variables_from_block(statement['if_body']))
-                used_variables.update(extract_variables_from_block(statement['else_body']))
-        elif statement['type'] == 'assignment':
-            # Assuming right-hand side might involve variable usage
-            used_variables.update(extract_variables(statement['value']))
+    last_assignment = {}  # Tracks the last assignment to each variable by index.
+    assignment_used = {}  # Tracks whether an assignment is used, by statement index.
 
-    # Eliminate dead assignments
-    optimized_statements = []
-    for statement in parsed_statements:
-        if statement['type'] == 'assignment' and statement['variable'] not in used_variables:
-            # Skip adding this statement to optimized_statements
-            continue
-        optimized_statements.append(statement)
+    # Assume parsed_statements is a list of dictionaries, each representing a statement.
+
+    for index, statement in enumerate(parsed_statements):
+        if statement['type'] == 'assignment':
+            var_name = statement['variable']
+            # Mark previous assignment to this variable as dead if it hasn't been used.
+            if var_name in last_assignment and not assignment_used.get(last_assignment[var_name], False):
+                parsed_statements[last_assignment[var_name]]['dead'] = True
+            last_assignment[var_name] = index
+            assignment_used[index] = False
+        # Example condition to identify usage of a variable. Adjust according to your statement structure.
+        elif statement['type'] == 'print':
+            var_name = statement['arguments'][0]  # Simplified assumption
+            if var_name in last_assignment:
+                assignment_used[last_assignment[var_name]] = True
+
+    # Filter out statements marked as 'dead'
+    optimized_statements = [stmt for stmt in parsed_statements if not stmt.get('dead', False)]
 
     return optimized_statements
+
+
 
 def extract_variables(expression):
     # Dummy function to extract variables from an expression string
@@ -469,10 +480,10 @@ folding_textbox.place(relx=0.5, rely=0.5, anchor="center")
 deadCode_textbox = customtkinter.CTkTextbox(tabView.tab("Dead Code Elimination"), width=400, height=200, state="disabled")
 deadCode_textbox.place(relx=0.5, rely=0.5, anchor="center")
 
-tokenButton = customtkinter.CTkButton(tabView.tab("Tokenize"), text="Tokenize", command=print_tokens)
+tokenButton = customtkinter.CTkButton(tabView.tab("Tokenize"), text="Tokenize", command=print_tokens_threaded)
 tokenButton.place(relx=0.5, rely=0.9, anchor="center")
 
-foldButton = customtkinter.CTkButton(tabView.tab("Parse"), text="Apply Constant Folding", command=display_folded_code)
+foldButton = customtkinter.CTkButton(tabView.tab("Parse"), text="Apply Constant Folding", command=display_folded_code_threaded)
 foldButton.place(relx=0.5, rely=0.7, anchor="center")
 
 deadCodeButton = customtkinter.CTkButton(tabView.tab("Constant Folding"), text="Apply Dead Code Elimination", command=display_eliminated_code)
