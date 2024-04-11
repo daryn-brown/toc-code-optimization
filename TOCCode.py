@@ -20,6 +20,7 @@ app.geometry("800x600")
 # Define our token types and regex patterns
 token_specs = [
     ('NUMBER',   r'\d+(\.\d*)?'),         # Integer or decimal number
+    ('DEF',      r'\bdef\b'),             # Function declaration
     ('KEYWORD',  r'\b(if|else|while|for|break)\b'), # Keywords
     ('EQUALS',   r'=='),                  # Equality operator
     ('ASSIGN',   r'='),                   # Assignment operator
@@ -165,7 +166,39 @@ class Parser:
         self.tokens = iter(tokens)
         self.current_token = None
         self.next_token()
+        self.functions_declared = set()  # Tracks names of declared functions
+        self.functions_called = set()  # Tracks names of called functions
     
+    def parse_function_declaration(self):
+    # Assuming the current token is 'DEF' which led us to this method
+        self.match('DEF')
+        
+        # The next token should be the function name (an identifier)
+        function_name = self.current_token[1]
+        self.match('IDENTIFIER')  # Match and consume the function name
+        self.functions_declared.add(function_name)  # Add the function name to declared functions
+        
+        # Match left parenthesis for parameters list
+        self.match('LPAREN')
+        parameters = self.parse_parameters()  # You may need to implement this method
+        # Match right parenthesis to close parameters list
+        self.match('RPAREN')
+        
+        # Match colon that precedes the function body
+        self.match('COLON')
+        
+        # The function body is expected to be an indented block
+        self.match('NEWLINE')  # Function bodies start on a new line
+        self.match('INDENT')  # Expect an increase in indentation
+        body = self.parse_block()  # Parse the function body as a block of statements
+        
+        # Match the dedentation after the function body
+        self.match('DEDENT')
+
+        # Return a structured representation of the function declaration
+        return {'type': 'function_def', 'name': function_name, 'parameters': parameters, 'body': body, 'args': parameters}
+
+
     def next_token(self):
         try:
             self.current_token = next(self.tokens)
@@ -182,7 +215,9 @@ class Parser:
     def parse(self):
         statements = []
         while self.current_token:
-            if self.current_token[0] == 'KEYWORD':
+            if self.current_token[0] == 'DEF':
+                statements.append(self.parse_function_declaration())
+            elif self.current_token[0] == 'KEYWORD':
                 if self.current_token[1] == 'if':
                     statements.append(self.parse_if_statement())
                 elif self.current_token[1] == 'while':
@@ -211,8 +246,7 @@ class Parser:
             args.append(self.parse_expression())  # Parse the next argument
 
         self.match('RPAREN')  # Consume the right parenthesis ')'
-        # Assuming function call must be followed by a semicolon ';'
-        self.match('SEMICOLON')
+        self.functions_called.add(function_name)
 
         return {'type': 'function_call', 'name': function_name, 'arguments': args}
 
@@ -269,7 +303,19 @@ class Parser:
 
         return block_statements
 
-
+    def parse_parameters(self):
+        """
+        Parse function parameters. This is a placeholder method. You'll need to implement
+        the logic to parse the parameters based on your language's syntax.
+        """
+        parameters = []
+        while self.current_token and self.current_token[0] != 'RPAREN':
+            if self.current_token[0] == 'IDENTIFIER':
+                parameters.append(self.current_token[1])
+                self.next_token()  # Move to the next token
+            elif self.current_token[0] == 'COMMA':
+                self.match('COMMA')  # Consume commas separating parameters
+        return parameters
 
 
     def parse_while_statement(self):
@@ -339,6 +385,11 @@ def constant_folding(statements):
             statement['if_body'] = constant_folding(statement['if_body'])
             statement['else_body'] = constant_folding(statement['else_body'])
             optimized_statements.append(statement)
+        elif statement['type'] == 'function_def':
+            # For function definitions, ensure the body is processed but not altered by constant folding
+            body_optimized = constant_folding(statement['body'])
+            statement['body'] = body_optimized
+            optimized_statements.append(statement)
         else:
             # Handle other statement types as necessary
             optimized_statements.append(statement)
@@ -355,21 +406,7 @@ def evaluate_expression(expression):
         # If the expression involves variables or is not purely numeric, return it as is
         return expression
     
-def display_folded_code_threaded():
-    threading.Thread(target=display_folded_code).start()    
-
-def display_folded_code():
-    tabView.set("Constant Folding")
-    code = textbox.get("1.0", "end-1c")
-    tokens = list(tokenize(code))
-    parser = Parser(tokens)
-    parsed_statements = parser.parse()
-    folded_statements = constant_folding(parsed_statements)
-
-    folding_textbox.configure(state="normal")
-    folding_textbox.delete("1.0", "end")
-
-    def print_statement(statement, indent=0):
+def print_statement(statement, indent=0):
         indent_space = '    ' * indent
         # Handle assignment statements
         if statement['type'] == 'assignment':
@@ -404,23 +441,40 @@ def display_folded_code():
         # Handle function definitions
         elif statement['type'] == 'function_def':
             func_name = statement['name']
-            args = ', '.join(statement['args'])
+            args = ', '.join(statement.get('args', []))
             folding_textbox.insert("end", f"{indent_space}def {func_name}({args}):\n")
             for stmt in statement['body']:
                 print_statement(stmt, indent + 1)
-        # Add additional handlers for other statement types as necessary
+            folding_textbox.insert("end", f"{indent_space}\n")  # Add a newline after the function body for separation    
+    
+def display_folded_code_threaded():
+    threading.Thread(target=display_folded_code).start()    
+
+def display_folded_code():
+    tabView.set("Constant Folding")
+    code = textbox.get("1.0", "end-1c")
+    tokens = list(tokenize(code))
+    parser = Parser(tokens)
+    parsed_statements = parser.parse()
+    folded_statements = constant_folding(parsed_statements)
+
+    folding_textbox.configure(state="normal")
+    folding_textbox.delete("1.0", "end")
+
+    
+
 
     for statement in folded_statements:
         print_statement(statement)
 
     folding_textbox.configure(state="disabled")
 
-
-def eliminate_dead_code(parsed_statements):
+def eliminate_dead_code(parsed_statements, functions_declared, functions_called):
     last_assignment = {}  # Tracks the last assignment to each variable by index.
     assignment_used = {}  # Tracks whether an assignment is used, by statement index.
+    unused_functions = functions_declared - functions_called  # Determine unused functions.
 
-    # Assume parsed_statements is a list of dictionaries, each representing a statement.
+    optimized_statements = []
 
     for index, statement in enumerate(parsed_statements):
         if statement['type'] == 'assignment':
@@ -430,22 +484,27 @@ def eliminate_dead_code(parsed_statements):
                 parsed_statements[last_assignment[var_name]]['dead'] = True
             last_assignment[var_name] = index
             assignment_used[index] = False
-        # Example condition to identify usage of a variable. Adjust according to your statement structure.
         elif statement['type'] == 'print':
-            var_name = statement['arguments'][0]  # Simplified assumption
+            var_name = statement['arguments'][0]
             if var_name in last_assignment:
                 assignment_used[last_assignment[var_name]] = True
+        elif statement['type'] == 'function_def' and statement['name'] in unused_functions:
+            # Skip this function definition since it's unused.
+            continue
 
-    # Filter out statements marked as 'dead'
-    optimized_statements = [stmt for stmt in parsed_statements if not stmt.get('dead', False)]
+        optimized_statements.append(statement)
+
+    # Filter out statements marked as 'dead'.
+    optimized_statements = [stmt for stmt in optimized_statements if not stmt.get('dead', False)]
 
     return optimized_statements
 
 
 
+
+
 def extract_variables(expression):
-    # Dummy function to extract variables from an expression string
-    # Implement based on your project's needs
+    # Function to extract variables from an expression string
     return set(re.findall(r'\b[A-Za-z_]\w*\b', expression))
 
 def extract_variables_from_block(block):
@@ -466,8 +525,12 @@ def display_eliminated_code():
     tokens = list(tokenize(code))  # Tokenize the code
     parser = Parser(tokens)  # Initialize the parser
     parsed_statements = parser.parse()  # Parse the code to get parsed statements
+
+    # Fetch functions declared and called
+    functions_declared = parser.functions_declared
+    functions_called = parser.functions_called
     
-    eliminated_statements = eliminate_dead_code(parsed_statements)  # Apply dead code elimination
+    eliminated_statements = eliminate_dead_code(parsed_statements, functions_declared, functions_called)  # Apply dead code elimination
     
     # Prepare and display the optimized code
     deadCode_textbox.configure(state="normal")
@@ -478,11 +541,32 @@ def display_eliminated_code():
         elif statement['type'] == 'function_call':
             args = ', '.join(statement['arguments'])
             deadCode_textbox.insert("end", f"{statement['name']}({args});\n")
+        elif statement['type'] == 'function_def':
+            func_name = statement['name']
+            args = ', '.join(statement.get('args', []))
+            deadCode_textbox.insert("end", f"def {func_name}({args}):\n")
+            for stmt in statement['body']:
+                print_statement(stmt, 1)  # Assuming print_statement function is accessible and correctly indents
+            deadCode_textbox.insert("end", "\n")  # Add a newline after the function body for separation    
         # Add more conditions as needed for other types of statements
     deadCode_textbox.configure(state="disabled")
     
     # Switch to the "Dead Code Elimination" tab
     tabView.set("Dead Code Elimination")
+
+
+def reset_all():
+    # Clear the textboxes
+    textbox.delete("1.0", "end")
+    tokens_textbox.delete("1.0", "end")
+    parser_textbox.delete("1.0", "end")
+    folding_textbox.delete("1.0", "end")
+    deadCode_textbox.delete("1.0", "end")
+
+    # Reset any other necessary states or variables
+
+    # Switch back to the "Tokenize" tab
+    tabView.set("Tokenize")
 
      
 
@@ -521,5 +605,13 @@ foldButton.place(relx=0.5, rely=0.7, anchor="center")
 
 deadCodeButton = customtkinter.CTkButton(tabView.tab("Constant Folding"), text="Apply Dead Code Elimination", command=display_eliminated_code)
 deadCodeButton.place(relx=0.5, rely=0.7, anchor="center")
+
+resetButton = customtkinter.CTkButton(
+    tabView.tab("Dead Code Elimination"),
+    text="Reset and Try Again",
+    command=reset_all
+)
+resetButton.place(relx=0.5, rely=0.8, anchor="center")
+
 
 app.mainloop()
