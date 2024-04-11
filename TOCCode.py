@@ -369,19 +369,52 @@ def display_folded_code():
     folding_textbox.configure(state="normal")
     folding_textbox.delete("1.0", "end")
 
-    for statement in folded_statements:
+    def print_statement(statement, indent=0):
+        indent_space = '    ' * indent
+        # Handle assignment statements
         if statement['type'] == 'assignment':
-            folding_textbox.insert("end", f"{statement['variable']} = {statement['value']}\n")
+            folding_textbox.insert("end", f"{indent_space}{statement['variable']} = {statement['value']}\n")
+        # Handle if statements and their bodies
+        elif statement['type'] == 'if_statement':
+            condition = statement['condition']
+            folding_textbox.insert("end", f"{indent_space}if {condition}:\n")
+            for stmt in statement['if_body']:
+                print_statement(stmt, indent + 1)
+            if statement['else_body']:
+                folding_textbox.insert("end", f"{indent_space}else:\n")
+                for stmt in statement['else_body']:
+                    print_statement(stmt, indent + 1)
+        # Handle print statements
         elif statement['type'] == 'function_call':
             args = ', '.join([str(arg) for arg in statement['arguments']])
-            folding_textbox.insert("end", f"{statement['name']}({args})\n")
-        elif statement['type'] == 'if':
-            condition = " ".join([statement['condition'][part] for part in ['left_operand', 'operator', 'right_operand']])
-            folding_textbox.insert("end", f"if {condition}:\n")
-            # Note: You might need to handle the body of the if statement.
-        # Handle other types of statements (e.g., 'while', 'for', etc.) as needed
+            folding_textbox.insert("end", f"{indent_space}print({args})\n")
+        # Handle while loops
+        elif statement['type'] == 'while':
+            condition = statement['condition']
+            folding_textbox.insert("end", f"{indent_space}while {condition}:\n")
+            for stmt in statement['body']:
+                print_statement(stmt, indent + 1)
+        # Handle for loops
+        elif statement['type'] == 'for':
+            iterator = statement['iterator']
+            iterable = statement['iterable']
+            folding_textbox.insert("end", f"{indent_space}for {iterator} in {iterable}:\n")
+            for stmt in statement['body']:
+                print_statement(stmt, indent + 1)
+        # Handle function definitions
+        elif statement['type'] == 'function_def':
+            func_name = statement['name']
+            args = ', '.join(statement['args'])
+            folding_textbox.insert("end", f"{indent_space}def {func_name}({args}):\n")
+            for stmt in statement['body']:
+                print_statement(stmt, indent + 1)
+        # Add additional handlers for other statement types as necessary
+
+    for statement in folded_statements:
+        print_statement(statement)
 
     folding_textbox.configure(state="disabled")
+
 
 def eliminate_dead_code(parsed_statements):
     last_assignment = {}  # Tracks the last assignment to each variable by index.
